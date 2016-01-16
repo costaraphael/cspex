@@ -1,19 +1,21 @@
-# CSP
+# CSPEx
 
-**TODO: Add description**
+A library that brings all the CSP joy to the Elixir land.
 
-## Installation
+## Usage
 
-If [available in Hex](https://hex.pm/docs/publish), the package can be installed as:
+1. Add the dependency to the mix.exs file:
 
-  1. Add cspex to your list of dependencies in `mix.exs`:
+```elixir
+deps: [{:cspex, "~> x.x.x"}, ...]
+```
 
-        def deps do
-          [{:cspex, "~> 0.0.1"}]
-        end
+2. Add the following snippet to any module where you want to use it:
 
-  2. Ensure cspex is started before your application:
+```elixir
+use CSP
+```
 
-        def application do
-          [applications: [:cspex]]
-        end
+3. Be happy!
+
+## Documentation
