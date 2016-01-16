@@ -21,13 +21,13 @@ defmodule CSP.Mixfile do
 
   def package do
     [maintainers: ["Raphael Vidal"],
-     licences: ["MIT"],
+     licenses: ["MIT"],
      links: %{"Github" => "https://github.com/vidalraphael/cspex"}]
   end
 
   def docs do
     [main: "CSP",
-     source_url: "https://github.com/vidalraphael/cspex"] 
+     source_url: "https://github.com/vidalraphael/cspex"]
   end
 
   def description do
