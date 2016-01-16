@@ -3,7 +3,7 @@ defmodule CSP.Mixfile do
 
   def project do
     [app: :cspex,
-     version: "0.1.0",
+     version: "0.1.1",
      name: "CSPEx",
      source_url: "https://github.com/vidalraphael/cspex",
      elixir: "~> 1.1",
