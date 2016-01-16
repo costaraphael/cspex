@@ -1,5 +1,9 @@
 # CSPEx
 
+[![Hex.pm](https://img.shields.io/hexpm/v/cspex.svg?style=flat-square)](https://hex.pm/packages/cspex)
+[![Hex.pm](https://img.shields.io/hexpm/dt/cspex.svg?style=flat-square)](https://hex.pm/packages/cspex)
+
+
 A library that brings all the CSP joy to the Elixir land.
 
 ## Usage
@@ -19,3 +23,5 @@ use CSP
 3. Be happy!
 
 ## Documentation
+
+Online documentation is available [here](http://hexdocs.pm/cspex).

@@ -43,15 +43,54 @@ defmodule CSP.Channel do
 
       channel = Channel.new
 
-      Enum.into(1..10, channel) # This line will block until someone reads the
-      ten values.
+      Enum.into(1..10, channel) # This line will block until someone reads all
+                                # the ten values.
 
   ## Example
 
+  An example using a channel in a supervision tree:
 
+      use CSP
+      import Supervisor.Spec
+
+      children = [
+        worker(Channel, [[name: MyApp.Channel, buffer_size: 10]])
+      ]
+
+      {:ok, pid} = Supervisor.start_link(children, strategy: :one_for_one)
+
+      # You can use all the functions with the registered name instead
+      # of the Channel struct
+      Channel.put(MyApp.Channel, :data)
+      Channel.put(MyApp.Channel, :other)
+
+      Channel.get(MyApp.Channel) #=> :data
+      Channel.get(MyApp.Channel) #=> :other
+
+      # If you want to use it in a list comprehension or Enumerable function
+      # just call `CSP.Channel.wrap/1`
+      channel = Channel.wrap(MyApp.Channel)
+
+      Enum.into(1..5, channel)
+      Enum.count(channel) #=> 5
+
+  You can use channels in any part of list comprehensions, just remember use
+  a buffer or run it in a separated process:
+
+      channel = Enum.into(1..5, Channel.new(buffer_size: 5))
+
+      :ok = Channel.close(channel)
+
+      other_channel = for x <- channel, into: Channel.new(buffer_size: 5) do
+        x * 2
+      end
+
+      :ok = Channel.close(other_channel)
+
+      Enum.to_list(other_channel) #=> [2, 4, 6, 8, 10]
   """
 
-  defstruct [:pid]
+  defstruct [:ref]
 
   @default_options [buffer_size: 0, buffer_type: :blocking]
   @server_module CSP.Channel.Server
@@ -66,7 +105,7 @@ defmodule CSP.Channel do
 
   @type channel_ref :: term | t
 
-  @type t :: %__MODULE__{pid: term}
+  @type t :: %__MODULE__{ref: term}
 
   @doc """
   Function responsible for the starting of the channel.
@@ -97,17 +136,26 @@ defmodule CSP.Channel do
 
   ## Example
 
-      iex> chann = CSP.Channel.new
-      iex> spawn_link(fn -> CSP.Channel.put(chann, :data) end)
-      iex> CSP.Channel.get(chann)
+      iex> channel = Channel.new
+      iex> spawn_link(fn -> Channel.put(channel, :data) end)
+      iex> Channel.get(channel)
       :data
   """
   @spec new(options) :: t
   def new(options \\ []) do
     {:ok, pid} = start_link(options)
 
-    %__MODULE__{pid: pid}
+    %__MODULE__{ref: pid}
   end
+
+  @doc """
+  Wraps the PID or registered name in a Channel struct.
+
+  If the passed in value is already a Channel struct, return it unchanged.
+  """
+  @spec wrap(channel_ref) :: t
+  def wrap(%__MODULE__{} = channel), do: channel
+  def wrap(channel), do: %__MODULE__{ref: channel}
 
   @doc """
   Function responsible for fetching a value of the channel.
@@ -115,7 +163,7 @@ defmodule CSP.Channel do
   It will block until a value is inserted in the channel or it is closed.
   """
   @spec get(channel_ref) :: term
-  def get(%__MODULE__{} = channel), do: get(channel.pid)
+  def get(%__MODULE__{} = channel), do: get(channel.ref)
   def get(channel) do
     GenServer.call(channel, :get, :infinity)
   end
@@ -127,7 +175,7 @@ defmodule CSP.Channel do
   the buffer type of the channel.
   """
   @spec put(channel_ref, term) :: :ok
-  def put(%__MODULE__{} = channel, item), do: put(channel.pid, item)
+  def put(%__MODULE__{} = channel, item), do: put(channel.ref, item)
   def put(channel, item) do
     GenServer.call(channel, {:put, item}, :infinity)
   end
@@ -136,16 +184,16 @@ defmodule CSP.Channel do
   Function responsible for closing a channel.
   """
   @spec close(channel_ref) :: :ok
-  def close(%__MODULE__{} = channel), do: close(channel.pid)
+  def close(%__MODULE__{} = channel), do: close(channel.ref)
   def close(channel) do
     GenServer.call(channel, :close, :infinity)
   end
 
   @doc """
-  Returns `true` or `false` wheter the channel is closed.
+  Returns `true` if the channel is closed or `false` otherwise.
   """
   @spec closed?(channel_ref) :: boolean
-  def closed?(%__MODULE__{} = channel), do: closed?(channel.pid)
+  def closed?(%__MODULE__{} = channel), do: closed?(channel.ref)
   def closed?(channel) do
     GenServer.call(channel, :"closed?", :infinity)
   end
@@ -154,7 +202,7 @@ defmodule CSP.Channel do
   Returns the current size of the channel.
   """
   @spec size(channel_ref) :: non_neg_integer
-  def size(%__MODULE__{} = channel), do: size(channel.pid)
+  def size(%__MODULE__{} = channel), do: size(channel.ref)
   def size(channel) do
     GenServer.call(channel, :size, :infinity)
   end
@@ -163,7 +211,7 @@ defmodule CSP.Channel do
   Returns `true` or `false` wheter the value is present on the channel.
   """
   @spec member?(channel_ref, term) :: boolean
-  def member?(%__MODULE__{} = channel, value), do: member?(channel.pid, value)
+  def member?(%__MODULE__{} = channel, value), do: member?(channel.ref, value)
   def member?(channel, value) do
     GenServer.call(channel, {:"member?", value}, :infinity)
   end
@@ -207,14 +255,14 @@ defimpl Inspect, for: CSP.Channel do
 
   def inspect(channel, opts) do
     state = cond do
-      is_pid(channel.pid) && Process.alive?(channel.pid) && CSP.Channel.closed?(channel) ->
+      is_pid(channel.ref) && Process.alive?(channel.ref) && CSP.Channel.closed?(channel) ->
         "closed"
-      is_pid(channel.pid) && Process.alive?(channel.pid) ->
+      is_pid(channel.ref) && Process.alive?(channel.ref) ->
         "open"
       :otherwise ->
         "not_channel"
     end
 
-    concat ["#Channel<pid=", to_doc(channel.pid, opts), ", state=", state, ">"]
+    concat ["#Channel<ref=", to_doc(channel.ref, opts), ", state=", state, ">"]
   end
 end
