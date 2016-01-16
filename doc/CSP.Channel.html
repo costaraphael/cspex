@@ -119,11 +119,54 @@ consideration the blocking operations:</p>
 
 <pre><code class="elixir">channel = Channel.new
 
-Enum.into(1..10, channel) # This line will block until someone reads the
-ten values.
+Enum.into(1..10, channel) # This line will block until someone reads all
+                          # the ten values.
 </code></pre>
 
 <h2>Example</h2>
+
+<p>An example using a channel in a supervision tree:</p>
+
+<pre><code class="elixir">use CSP
+import Supervisor.Spec
+
+children = [
+  worker(Channel, [[name: MyApp.Channel, buffer_size: 10]])
+]
+
+{:ok, pid} = Supervisor.start_link(children, strategy: :one_for_one)
+
+# You can use all the functions with the registered name instead
+# of the Channel struct
+Channel.put(MyApp.Channel, :data)
+Channel.put(MyApp.Channel, :other)
+
+Channel.get(MyApp.Channel) #=&gt; :data
+Channel.get(MyApp.Channel) #=&gt; :other
+
+# If you want to use it in a list comprehension or Enumerable function
+# just call [`CSP.Channel.wrap/1`](CSP.Channel.html#wrap/1)
+channel = Channel.wrap(MyApp.Channel)
+
+Enum.into(1..5, channel)
+Enum.count(channel) #=&gt; 5
+</code></pre>
+
+<p>You can use channels in any part of list comprehensions, just remember use
+a buffer or run it in a separated process:</p>
+
+<pre><code class="elixir">channel = Enum.into(1..5, Channel.new(buffer_size: 5))
+
+:ok = Channel.close(channel)
+
+other_channel = for x &lt;- channel, into: Channel.new(buffer_size: 5) do
+  x * 2
+end
+
+:ok = Channel.close(other_channel)
+
+Enum.to_list(other_channel) #=&gt; [2, 4, 6, 8, 10]
+</code></pre>
 
         </section>
       
@@ -194,7 +237,7 @@ ten values.
     <a href="#closed?/1">closed?(channel)</a>
   </div>
   
-    <div class="summary-synopsis"><p>Returns <code>true</code> or <code>false</code> wheter the channel is closed</p>
+    <div class="summary-synopsis"><p>Returns <code>true</code> if the channel is closed or <code>false</code> otherwise</p>
 </div>
   
 </div>
@@ -261,6 +304,15 @@ ten values.
 </div>
   
 </div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="#wrap/1">wrap(channel)</a>
+  </div>
+  
+    <div class="summary-synopsis"><p>Wraps the PID or registered name in a Channel struct</p>
+</div>
+  
+</div>
 
   </div>
 
@@ -301,7 +353,7 @@ ten values.
   
 </div>
 <div id="t:t/0" class="type-detail">
-  <pre><code class="elixir"><a href="#t:t/0">t</a> :: %CSP.Channel{pid: term}</code></pre>
+  <pre><code class="elixir"><a href="#t:t/0">t</a> :: %CSP.Channel{ref: term}</code></pre>
   
 </div>
 
@@ -324,7 +376,7 @@ ten values.
     </a>
     <span class="signature">close(channel)</span>
       
-      <a href="https://github.com/vidalraphael/cspex/blob/master/lib/csp/channel.ex#L139" class="view-source" rel="help" title="View Source">
+      <a href="https://github.com/vidalraphael/cspex/blob/master/lib/csp/channel.ex#L187" class="view-source" rel="help" title="View Source">
        <i class="icon-code"></i>
      </a>
     
@@ -351,7 +403,7 @@ ten values.
     </a>
     <span class="signature">closed?(channel)</span>
       
-      <a href="https://github.com/vidalraphael/cspex/blob/master/lib/csp/channel.ex#L148" class="view-source" rel="help" title="View Source">
+      <a href="https://github.com/vidalraphael/cspex/blob/master/lib/csp/channel.ex#L196" class="view-source" rel="help" title="View Source">
        <i class="icon-code"></i>
      </a>
     
@@ -367,7 +419,7 @@ ten values.
     </div>
   
   <section class="docstring">
-    <p>Returns <code>true</code> or <code>false</code> wheter the channel is closed.</p>
+    <p>Returns <code>true</code> if the channel is closed or <code>false</code> otherwise.</p>
 
   </section>
 </div>
@@ -378,7 +430,7 @@ ten values.
     </a>
     <span class="signature">get(channel)</span>
       
-      <a href="https://github.com/vidalraphael/cspex/blob/master/lib/csp/channel.ex#L118" class="view-source" rel="help" title="View Source">
+      <a href="https://github.com/vidalraphael/cspex/blob/master/lib/csp/channel.ex#L166" class="view-source" rel="help" title="View Source">
        <i class="icon-code"></i>
      </a>
     
@@ -407,7 +459,7 @@ ten values.
     </a>
     <span class="signature">member?(channel, value)</span>
       
-      <a href="https://github.com/vidalraphael/cspex/blob/master/lib/csp/channel.ex#L166" class="view-source" rel="help" title="View Source">
+      <a href="https://github.com/vidalraphael/cspex/blob/master/lib/csp/channel.ex#L214" class="view-source" rel="help" title="View Source">
        <i class="icon-code"></i>
      </a>
     
@@ -434,7 +486,7 @@ ten values.
     </a>
     <span class="signature">new(options \\ [])</span>
       
-      <a href="https://github.com/vidalraphael/cspex/blob/master/lib/csp/channel.ex#L106" class="view-source" rel="help" title="View Source">
+      <a href="https://github.com/vidalraphael/cspex/blob/master/lib/csp/channel.ex#L145" class="view-source" rel="help" title="View Source">
        <i class="icon-code"></i>
      </a>
     
@@ -456,9 +508,9 @@ ten values.
 
 <h2>Example</h2>
 
-<pre><code class="iex elixir">iex&gt; chann = CSP.Channel.new
-iex&gt; spawn_link(fn -&gt; CSP.Channel.put(chann, :data) end)
-iex&gt; CSP.Channel.get(chann)
+<pre><code class="iex elixir">iex&gt; channel = Channel.new
+iex&gt; spawn_link(fn -&gt; Channel.put(channel, :data) end)
+iex&gt; Channel.get(channel)
 :data
 </code></pre>
 
@@ -471,7 +523,7 @@ iex&gt; CSP.Channel.get(chann)
     </a>
     <span class="signature">put(channel, item)</span>
       
-      <a href="https://github.com/vidalraphael/cspex/blob/master/lib/csp/channel.ex#L130" class="view-source" rel="help" title="View Source">
+      <a href="https://github.com/vidalraphael/cspex/blob/master/lib/csp/channel.ex#L178" class="view-source" rel="help" title="View Source">
        <i class="icon-code"></i>
      </a>
     
@@ -501,7 +553,7 @@ the buffer type of the channel.</p>
     </a>
     <span class="signature">size(channel)</span>
       
-      <a href="https://github.com/vidalraphael/cspex/blob/master/lib/csp/channel.ex#L157" class="view-source" rel="help" title="View Source">
+      <a href="https://github.com/vidalraphael/cspex/blob/master/lib/csp/channel.ex#L205" class="view-source" rel="help" title="View Source">
        <i class="icon-code"></i>
      </a>
     
@@ -528,7 +580,7 @@ the buffer type of the channel.</p>
     </a>
     <span class="signature">start(options \\ [])</span>
       
-      <a href="https://github.com/vidalraphael/cspex/blob/master/lib/csp/channel.ex#L87" class="view-source" rel="help" title="View Source">
+      <a href="https://github.com/vidalraphael/cspex/blob/master/lib/csp/channel.ex#L126" class="view-source" rel="help" title="View Source">
        <i class="icon-code"></i>
      </a>
     
@@ -555,7 +607,7 @@ the buffer type of the channel.</p>
     </a>
     <span class="signature">start_link(options \\ [])</span>
       
-      <a href="https://github.com/vidalraphael/cspex/blob/master/lib/csp/channel.ex#L77" class="view-source" rel="help" title="View Source">
+      <a href="https://github.com/vidalraphael/cspex/blob/master/lib/csp/channel.ex#L116" class="view-source" rel="help" title="View Source">
        <i class="icon-code"></i>
      </a>
     
@@ -574,6 +626,35 @@ the buffer type of the channel.</p>
     <p>Function responsible for the starting of the channel.</p>
 
 <p>Ideal for using a CSP in a supervision tree.</p>
+
+  </section>
+</div>
+<div class="detail" id="wrap/1">
+  <div class="detail-header">
+    <a href="#wrap/1" class="detail-link" title="Link to this function">
+      <i class="icon-link"></i>
+    </a>
+    <span class="signature">wrap(channel)</span>
+      
+      <a href="https://github.com/vidalraphael/cspex/blob/master/lib/csp/channel.ex#L157" class="view-source" rel="help" title="View Source">
+       <i class="icon-code"></i>
+     </a>
+    
+  </div>
+  
+    <div class="specs">
+      <h4 class="specs-title">Specs</h4>
+      <div class="specs-list">
+        
+          <pre><code class="elixir">wrap(<a href="#t:channel_ref/0">channel_ref</a>) :: <a href="#t:t/0">t</a></code></pre>
+        
+      </div>
+    </div>
+  
+  <section class="docstring">
+    <p>Wraps the PID or registered name in a Channel struct.</p>
+
+<p>If the passed in value is already a Channel struct, return it unchanged.</p>
 
   </section>
 </div>
