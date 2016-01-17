@@ -14,7 +14,7 @@ defmodule CSP.Channel.Server do
 
   @doc false
   defhandlecall put(_item), state: %{closed: true} do
-    raise "Can't put new values on a closed channel."
+    reply(:error)
   end
 
   defhandlecall put(item), state: %{receivers: [], options: options, buffer: buffer} = state, from: from do

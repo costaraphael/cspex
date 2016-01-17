@@ -6,6 +6,17 @@
 
 A library that brings all the CSP joy to the Elixir land.
 
+Highly inspired on Clojure's core.async library.
+
+Suggestions and pull requests are more than welcome.
+
+## Why would I use CSPEx?
+
+There are some cases where it is more simple and practical to know only that
+someone is getting a message, instead of dealing with who should receive a
+message, like a bunch of workers that reads through a channel and do some work,
+while a master simply writes to it.
+
 ## Usage
 
 * Add the dependency to the mix.exs file:
@@ -14,7 +25,7 @@ A library that brings all the CSP joy to the Elixir land.
 deps: [{:cspex, "~> x.x.x"}, ...]
 ```
 
-* Add the following snippet to any module where you want to use it:
+* Add the following snippet to anywhere you want to use it:
 
 ```elixir
 use CSP

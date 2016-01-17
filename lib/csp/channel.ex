@@ -1,6 +1,6 @@
 defmodule CSP.Channel do
   @moduledoc """
-  Module used to create and manage Channels
+  Module used to create and manage channels.
 
   ## Options
 
@@ -11,10 +11,8 @@ defmodule CSP.Channel do
 
     * `name` - Registers the channel proccess with a name. Note that the
     naming constraints are the same applied to a `GenServer`.
-    * `buffer_type` - The type of the buffer used in the channel (by default
-    `:blocking`).
-    * `buffer_size` - The maximum capacity of the channel's buffer (by default
-    `0`).
+    * `buffer_type` - The type of the buffer used in the channel (default: `:blocking`).
+    * `buffer_size` - The maximum capacity of the channel's buffer (default: `0`).
 
   ## Buffer types
 
@@ -31,26 +29,35 @@ defmodule CSP.Channel do
   You can use a channel just like any collection:
 
       channel = Channel.new
-      other_channel = Channel.new
 
-      spawn fn -> Enum.into(channel, other_channel) end
+      pid = spawn_link(fn -> Enum.into([:some, :data], channel) end)
+      Process.alive?(pid) #=> true
 
-      Channel.put(channel, "some_data")
-      Channel.get(other_channel) #=> "some_data"
+      Channel.get(channel) #=> :some
+      Process.alive?(pid) #=> true
+
+      Channel.get(channel) #=> :data
+      Process.alive?(pid) #=> false
 
   All functions from `Enum` and `Stream` are available, but you must take into
   consideration the blocking operations:
 
       channel = Channel.new
 
-      Enum.into(1..10, channel) # This line will block until someone reads all
-                                # the ten values.
+      # This line will block until someone reads all the ten values.
+      Enum.into(1..10, channel)
+
+      # This line will block until someone puts at least 4 values on the channel.
+      # (More if there are more listeners on the same channel)
+      Enum.take(channel, 4)
+
+      # This line will block until someone closes the channel.
+      Enum.into(channel, [])
 
   ## Example
 
-  An example using a channel in a supervision tree:
+  You can use a channel in a supervision tree:
 
-      use CSP
       import Supervisor.Spec
 
       children = [
@@ -60,22 +67,20 @@ defmodule CSP.Channel do
       {:ok, pid} = Supervisor.start_link(children, strategy: :one_for_one)
 
       # You can use all the functions with the registered name instead
-      # of the Channel struct
+      # of the channel struct
       Channel.put(MyApp.Channel, :data)
       Channel.put(MyApp.Channel, :other)
 
       Channel.get(MyApp.Channel) #=> :data
       Channel.get(MyApp.Channel) #=> :other
 
-      # If you want to use it in a list comprehension or Enumerable function
-      # just call `CSP.Channel.wrap/1`
+      # If you want to use it as a collection just call Channel.wrap/1
       channel = Channel.wrap(MyApp.Channel)
 
       Enum.into(1..5, channel)
       Enum.count(channel) #=> 5
 
-  You can use channels in any part of list comprehensions, just remember use
-  a buffer or run it in a separated process:
+  You can use channels in any part of list comprehensions:
 
       channel = Enum.into(1..5, Channel.new(buffer_size: 5))
 
@@ -152,6 +157,19 @@ defmodule CSP.Channel do
   Wraps the PID or registered name in a Channel struct.
 
   If the passed in value is already a Channel struct, return it unchanged.
+
+  ## Example
+
+      iex> {:ok, pid} = Channel.start_link(buffer_size: 5)
+      iex> channel = Channel.wrap(pid)
+      iex> Enum.into(1..5, channel)
+      iex> Channel.close(channel)
+      iex> Enum.to_list(channel)
+      [1, 2, 3, 4, 5]
+
+      iex> channel = Channel.new
+      iex> channel == Channel.wrap(channel)
+      true
   """
   @spec wrap(channel_ref) :: t
   def wrap(%__MODULE__{} = channel), do: channel
@@ -161,6 +179,18 @@ defmodule CSP.Channel do
   Function responsible for fetching a value of the channel.
 
   It will block until a value is inserted in the channel or it is closed.
+
+  Always returns `nil` when the channel is closed.
+
+  ## Example
+
+      iex> channel = Channel.new
+      iex> spawn_link(fn -> Channel.put(channel, :data) end)
+      iex> Channel.get(channel)
+      :data
+      iex> Channel.close(channel)
+      iex> Channel.get(channel)
+      nil
   """
   @spec get(channel_ref) :: term
   def get(%__MODULE__{} = channel), do: get(channel.ref)
@@ -171,17 +201,42 @@ defmodule CSP.Channel do
   @doc """
   Function responsible for putting a value in the channel.
 
-  It may block until a value is fetched deppending on
-  the buffer type of the channel.
+  It may block until a value is fetched deppending on the buffer type of the
+  channel.
+
+  Raises if trying to put `nil` or if trying to put anything in a closed channel.
+
+  ## Example
+
+      iex> channel = Channel.new(buffer_size: 5)
+      iex> Channel.put(channel, :data)
+      iex> Channel.put(channel, :other)
+      iex> Channel.close(channel)
+      iex> Enum.to_list(channel)
+      [:data, :other]
   """
   @spec put(channel_ref, term) :: :ok
   def put(%__MODULE__{} = channel, item), do: put(channel.ref, item)
+  def put(_channel, nil), do: raise "Can't put nil on a channel."
   def put(channel, item) do
-    GenServer.call(channel, {:put, item}, :infinity)
+    if CSP.Channel.closed?(channel) do
+      raise "Can't put a new value on a closed channel."
+    else
+      GenServer.call(channel, {:put, item}, :infinity)
+    end
   end
 
   @doc """
   Function responsible for closing a channel.
+
+  ## Example
+
+      iex> channel = Channel.new
+      iex> Channel.closed?(channel)
+      false
+      iex> Channel.close(channel)
+      iex> Channel.closed?(channel)
+      true
   """
   @spec close(channel_ref) :: :ok
   def close(%__MODULE__{} = channel), do: close(channel.ref)
@@ -200,6 +255,22 @@ defmodule CSP.Channel do
 
   @doc """
   Returns the current size of the channel.
+
+  Remember that the size of the channel is the number of items in the buffer plus
+  the number of pending "put" operations.
+
+  ## Example
+
+      iex> channel = Enum.into(1..3, Channel.new(buffer_size: 4))
+      iex> Channel.size(channel)
+      3
+      iex> Channel.put(channel, 4)
+      iex> Channel.size(channel)
+      4
+      iex> spawn_link(fn -> Channel.put(channel, 5) end)
+      iex> :timer.sleep(10)
+      iex> Channel.size(channel)
+      5 # 4 items in the full buffer plus one pending "put"
   """
   @spec size(channel_ref) :: non_neg_integer
   def size(%__MODULE__{} = channel), do: size(channel.ref)
