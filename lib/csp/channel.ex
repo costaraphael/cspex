@@ -150,7 +150,7 @@ defmodule CSP.Channel do
   def new(options \\ []) do
     {:ok, pid} = start_link(options)
 
-    %__MODULE__{ref: pid}
+    wrap(pid)
   end
 
   @doc """
@@ -241,7 +241,7 @@ defmodule CSP.Channel do
   @spec close(channel_ref) :: :ok
   def close(%__MODULE__{} = channel), do: close(channel.ref)
   def close(channel) do
-    GenServer.call(channel, :close, :infinity)
+    GenServer.call(channel, :close)
   end
 
   @doc """
@@ -250,7 +250,7 @@ defmodule CSP.Channel do
   @spec closed?(channel_ref) :: boolean
   def closed?(%__MODULE__{} = channel), do: closed?(channel.ref)
   def closed?(channel) do
-    GenServer.call(channel, :"closed?", :infinity)
+    GenServer.call(channel, :"closed?")
   end
 
   @doc """
@@ -275,7 +275,7 @@ defmodule CSP.Channel do
   @spec size(channel_ref) :: non_neg_integer
   def size(%__MODULE__{} = channel), do: size(channel.ref)
   def size(channel) do
-    GenServer.call(channel, :size, :infinity)
+    GenServer.call(channel, :size)
   end
 
   @doc """
@@ -284,7 +284,7 @@ defmodule CSP.Channel do
   @spec member?(channel_ref, term) :: boolean
   def member?(%__MODULE__{} = channel, value), do: member?(channel.ref, value)
   def member?(channel, value) do
-    GenServer.call(channel, {:"member?", value}, :infinity)
+    GenServer.call(channel, {:"member?", value})
   end
 end
 

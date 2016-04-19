@@ -1,97 +1,131 @@
 defmodule CSP.Channel.Server do
   @moduledoc false
 
-  use ExActor.GenServer
-
   @doc false
   def init(options) do
-     {:ok, %{senders:   [],
+     {:ok, %{senders: [],
              receivers: [],
-             buffer:    [],
-             options:   options,
+             buffer: [],
+             options: options,
              closed: false}}
   end
 
   @doc false
-  defhandlecall put(_item), state: %{closed: true} do
-    reply(:error)
+  def handle_call({:put, _item}, _from, %{closed: true} = state) do
+    {:reply, :error, state}
   end
 
-  defhandlecall put(item), state: %{receivers: [], options: options, buffer: buffer} = state, from: from do
-    case put_in_buffer(buffer, item, options[:buffer_type], options[:buffer_size]) do
+  def handle_call({:put, item}, from, %{receivers: []} = state) do
+    buffer_type = state.options[:buffer_type]
+    buffer_size = state.options[:buffer_size]
+
+    case put_in_buffer(state.buffer, item, buffer_type, buffer_size) do
       {:ok, buffer} ->
-        set_and_reply(Map.put(state, :buffer, buffer), :ok)
+        {:reply, :ok, Map.put(state, :buffer, buffer)}
 
       {:error, :block} ->
-        new_state(Map.update!(state, :senders, &[{from, item} | &1]))
+        {:noreply, Map.update!(state, :senders, &[{from, item} | &1])}
     end
   end
 
-  defhandlecall put(item), state: %{receivers: receivers} = state do
-    {receiver, receivers} = pop(receivers)
-    GenServer.reply(receiver, item)
+  def handle_call({:put, item}, from, state) do
+    case next_peer(state.receivers) do
+      {nil, []} ->
+        handle_call({:put, item}, from, Map.put(state, :receivers, []))
+      {receiver, receivers} ->
+        GenServer.reply(receiver, item)
 
-    set_and_reply(Map.put(state, :receivers, receivers), :ok)
+        {:reply, :ok, Map.put(state, :receivers, receivers)}
+    end
   end
 
   @doc false
-  defhandlecall get, state: %{buffer: [], senders: [], closed: false} = state, from: from do
-    new_state(Map.update!(state, :receivers, &[from | &1]))
+  def handle_call(:get, from, %{buffer: [], senders: [], closed: false} = state) do
+    {:noreply, Map.update!(state, :receivers, &[from | &1])}
   end
 
-  defhandlecall get, state: %{buffer: [], senders: [], closed: true} do
-    reply(nil)
+  def handle_call(:get, _from, %{buffer: [], senders: [], closed: true} = state) do
+    {:reply, nil, state}
   end
 
-  defhandlecall get, state: %{buffer: [], senders: senders} = state do
-    {{sender, item}, senders} = pop(senders)
-    GenServer.reply(sender, :ok)
+  def handle_call(:get, from, %{buffer: []} = state) do
+    case next_peer(state.senders) do
+      {nil, []} ->
+        handle_call(:get, from, Map.put(state, :senders, []))
 
-    set_and_reply(Map.put(state, :senders, senders), item)
+      {{sender, item}, senders} ->
+        GenServer.reply(sender, :ok)
+
+        {:reply, item, Map.put(state, :senders, senders)}
+    end
   end
 
-  defhandlecall get, state: %{buffer: buffer, senders: []} = state do
-    {item, buffer} = pop(buffer)
+  def handle_call(:get, _from, %{senders: []} = state) do
+    {item, buffer} = pop(state.buffer)
 
-    set_and_reply(Map.put(state, :buffer, buffer), item)
+    {:reply, item, Map.put(state, :buffer, buffer)}
   end
 
-  defhandlecall get, state: %{buffer: buffer, senders: senders} = state do
-    {item, buffer} = pop(buffer)
-    {{sender, to_buffer}, senders} = pop(senders)
+  def handle_call(:get, from, state) do
+    case next_peer(state.senders) do
+      {nil, []} ->
+        handle_call(:get, from, Map.put(state, :senders, []))
 
-    GenServer.reply(sender, :ok)
-    buffer = [to_buffer | buffer]
+      {{sender, to_buffer}, senders} ->
+        {item, buffer} = pop(state.buffer)
 
-    state
-    |> Map.put(:buffer, buffer)
-    |> Map.put(:senders, senders)
-    |> set_and_reply(item)
-  end
+        GenServer.reply(sender, :ok)
+        buffer = [to_buffer | buffer]
 
-  @doc false
-  defhandlecall close, state: %{receivers: receivers} = state do
-    Enum.each(receivers, &GenServer.reply(&1, nil))
+        state = state
+                |> Map.put(:buffer, buffer)
+                |> Map.put(:senders, senders)
 
-    set_and_reply(Map.put(state, :closed, true), :ok)
-  end
-
-  @doc false
-  defhandlecall size, state: %{buffer: buffer, senders: senders} do
-    reply(length(buffer) + length(senders))
-  end
-
-  @doc false
-  defhandlecall member?(value), state: %{buffer: buffer, senders: senders} do
-    items = Enum.map(senders, &elem(&1, 1)) ++ buffer
-
-    reply(Enum.member?(items, value))
+        {:reply, item, state}
+    end
   end
 
   @doc false
-  defhandlecall closed?, state: %{closed: closed} do
-    reply(closed)
+  def handle_call(:close, _from, state) do
+    Enum.each(state.receivers, &GenServer.reply(&1, nil))
+
+    {:reply, :ok, Map.put(state, :closed, true)}
   end
+
+  @doc false
+  def handle_call(:size, _from, state) do
+    {:reply, length(state.buffer) + length(state.senders), state}
+  end
+
+  @doc false
+  def handle_call({:"member?", value}, _from, state) do
+    items = Enum.map(state.senders, &elem(&1, 1)) ++ state.buffer
+
+    {:reply, Enum.member?(items, value), state}
+  end
+
+  @doc false
+  def handle_call(:"closed?", _from, state) do
+    {:reply, state.closed, state}
+  end
+
+  defp next_peer(peers) do
+    {next, peers} = peers |> Enum.reverse |> next_alive
+
+    {next, Enum.reverse(peers)}
+  end
+
+  defp next_alive([]), do: {nil, []}
+  defp next_alive([peer | peers]) do
+    if peer |> extract_pid |> Process.alive? do
+      {peer, peers}
+    else
+      next_alive(peers)
+    end
+  end
+
+  defp extract_pid({{pid, _flag}, _value}), do: pid
+  defp extract_pid({pid, _flag}), do: pid
 
   defp pop(list) do
     item = List.last(list)
