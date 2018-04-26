@@ -98,3 +98,7 @@ Be happy!
 ## Documentation
 
 Online documentation is available [here](http://hexdocs.pm/cspex).
+
+## License
+
+The CSPEx source code is licensed under the [MIT License](https://github.com/costaraphael/cspex/blob/master/LICENSE)
