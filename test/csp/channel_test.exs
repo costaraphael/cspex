@@ -1,8 +1,9 @@
 defmodule CSP.ChannelTest do
   use ExUnit.Case
-  use CSP
 
-  doctest CSP.Channel
+  alias CSP.Channel
+
+  doctest Channel
 
   test "the sliding buffer discards older values" do
     channel =
@@ -25,14 +26,15 @@ defmodule CSP.ChannelTest do
   end
 
   test "the blocking buffer blocks writes" do
-    channel = Channel.new
-    main = self
+    channel = Channel.new()
+    main = self()
 
-    pid = spawn fn ->
-      Channel.put(channel, :foo)
-      Channel.put(channel, :bar)
-      send(main, {self, :done})
-    end
+    pid =
+      spawn(fn ->
+        Channel.put(channel, :foo)
+        Channel.put(channel, :bar)
+        send(main, {self(), :done})
+      end)
 
     refute_receive {^pid, :done}
     assert Channel.get(channel) == :foo
@@ -44,52 +46,56 @@ defmodule CSP.ChannelTest do
   end
 
   test "putting in a closed channel raises" do
-    channel = Channel.new
+    channel = Channel.new()
 
     Channel.close(channel)
 
-    assert_raise(RuntimeError, ~r/Can't put a new value on a closed channel./, fn ->
-      Channel.put(channel, :value)
-    end)
+    assert {:error, :closed} = Channel.put(channel, :value)
   end
 
   test "putting nil in a channel raises" do
-    channel = Channel.new
+    channel = Channel.new()
 
-    assert_raise(RuntimeError, ~r/Can't put nil on a channel./, fn ->
+    assert_raise(ArgumentError, ~r/Can't put nil on a channel./, fn ->
       Channel.put(channel, nil)
     end)
   end
 
   test "a channel does not get values from dead processes" do
-    channel = Channel.new
+    channel = Channel.new()
 
     func = fn ->
-      Channel.put(channel, self)
+      Channel.put(channel, self())
     end
 
-    pid1 = spawn(func)
-    pid2 = spawn(func)
+    pid1 = spawn_link(func)
+    Process.sleep(10)
+    pid2 = spawn_link(func)
 
+    Process.flag(:trap_exit, true)
     Process.exit(pid1, :kill)
+    Process.sleep(10)
 
     assert pid2 == Channel.get(channel)
   end
 
   test "a channel does not send values to dead processes" do
-    channel = Channel.new
-    main = self
+    channel = Channel.new()
+    main = self()
 
     func = fn ->
-      send(main, {self, Channel.get(channel)})
+      send(main, {self(), Channel.get(channel)})
     end
 
-    pid1 = spawn(func)
-    pid2 = spawn(func)
+    pid1 = spawn_link(func)
+    Process.sleep(10)
+    pid2 = spawn_link(func)
 
+    Process.flag(:trap_exit, true)
     Process.exit(pid1, :kill)
+    Process.sleep(10)
 
-    Channel.put(channel, :foo)
+    assert :ok = Channel.put(channel, :foo)
 
     assert_receive {^pid2, :foo}
   end
@@ -99,9 +105,10 @@ defmodule CSP.ChannelTest do
 
     Channel.close(channel)
 
-    other_channel = for x <- channel, into: Channel.new(buffer_size: 5) do
-      x * 2
-    end
+    other_channel =
+      for x <- channel, into: Channel.new(buffer_size: 5) do
+        x * 2
+      end
 
     Channel.close(other_channel)
 

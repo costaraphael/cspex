@@ -1,3 +1,5 @@
+/.vscode
+/.elixir_ls
 /_build
 /cover
 /deps

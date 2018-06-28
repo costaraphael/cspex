@@ -1,151 +1,181 @@
 defmodule CSP.Channel.Server do
   @moduledoc false
 
-  @doc false
-  def init(options) do
-     {:ok, %{senders: [],
-             receivers: [],
-             buffer: [],
-             options: options,
-             closed: false}}
+  alias CSP.Buffer
+
+  require Logger
+
+  @behaviour GenServer
+
+  @impl GenServer
+  def init(buffer) do
+    {:ok,
+     %{
+       senders: :queue.new(),
+       receivers: :queue.new(),
+       buffer: buffer,
+       to_reply: [],
+       closed: false
+     }}
   end
 
-  @doc false
-  def handle_call({:put, _item}, _from, %{closed: true} = state) do
-    {:reply, :error, state}
-  end
+  @impl GenServer
+  def handle_call({:put, item}, {pid, _ref} = from, state) do
+    if state.closed do
+      {:reply, :closed, state}
+    else
+      ref = Process.monitor(pid)
+      from = {from, ref}
 
-  def handle_call({:put, item}, from, %{receivers: []} = state) do
-    buffer_type = state.options[:buffer_type]
-    buffer_size = state.options[:buffer_size]
-
-    case put_in_buffer(state.buffer, item, buffer_type, buffer_size) do
-      {:ok, buffer} ->
-        {:reply, :ok, Map.put(state, :buffer, buffer)}
-
-      {:error, :block} ->
-        {:noreply, Map.update!(state, :senders, &[{from, item} | &1])}
+      state
+      |> Map.update!(:senders, &:queue.in({from, item}, &1))
+      |> handle_state()
     end
   end
 
-  def handle_call({:put, item}, from, state) do
-    case next_peer(state.receivers) do
-      {nil, []} ->
-        handle_call({:put, item}, from, Map.put(state, :receivers, []))
-      {receiver, receivers} ->
-        GenServer.reply(receiver, item)
+  @impl GenServer
+  def handle_call(:get, {pid, _ref} = from, state) do
+    ref = Process.monitor(pid)
+    from = {from, ref}
 
-        {:reply, :ok, Map.put(state, :receivers, receivers)}
-    end
+    state
+    |> Map.update!(:receivers, &:queue.in(from, &1))
+    |> handle_state()
   end
 
-  @doc false
-  def handle_call(:get, from, %{buffer: [], senders: [], closed: false} = state) do
-    {:noreply, Map.update!(state, :receivers, &[from | &1])}
-  end
-
-  def handle_call(:get, _from, %{buffer: [], senders: [], closed: true} = state) do
-    {:reply, nil, state}
-  end
-
-  def handle_call(:get, from, %{buffer: []} = state) do
-    case next_peer(state.senders) do
-      {nil, []} ->
-        handle_call(:get, from, Map.put(state, :senders, []))
-
-      {{sender, item}, senders} ->
-        GenServer.reply(sender, :ok)
-
-        {:reply, item, Map.put(state, :senders, senders)}
-    end
-  end
-
-  def handle_call(:get, _from, %{senders: []} = state) do
-    {item, buffer} = pop(state.buffer)
-
-    {:reply, item, Map.put(state, :buffer, buffer)}
-  end
-
-  def handle_call(:get, from, state) do
-    case next_peer(state.senders) do
-      {nil, []} ->
-        handle_call(:get, from, Map.put(state, :senders, []))
-
-      {{sender, to_buffer}, senders} ->
-        {item, buffer} = pop(state.buffer)
-
-        GenServer.reply(sender, :ok)
-        buffer = [to_buffer | buffer]
-
-        state = state
-                |> Map.put(:buffer, buffer)
-                |> Map.put(:senders, senders)
-
-        {:reply, item, state}
-    end
-  end
-
-  @doc false
-  def handle_call(:close, _from, state) do
-    Enum.each(state.receivers, &GenServer.reply(&1, nil))
-
-    {:reply, :ok, Map.put(state, :closed, true)}
-  end
-
-  @doc false
-  def handle_call(:size, _from, state) do
-    {:reply, length(state.buffer) + length(state.senders), state}
-  end
-
-  @doc false
-  def handle_call({:"member?", value}, _from, state) do
-    items = Enum.map(state.senders, &elem(&1, 1)) ++ state.buffer
-
-    {:reply, Enum.member?(items, value), state}
-  end
-
-  @doc false
-  def handle_call(:"closed?", _from, state) do
+  @impl GenServer
+  def handle_call(:closed?, _from, state) do
     {:reply, state.closed, state}
   end
 
-  defp next_peer(peers) do
-    {next, peers} = peers |> Enum.reverse |> next_alive
+  @impl GenServer
+  def handle_call(:close, {pid, _ref} = from, state) do
+    sender_replies =
+      state.senders
+      |> :queue.to_list()
+      |> Enum.map(&{&1, :closed})
 
-    {next, Enum.reverse(peers)}
+    ref = Process.monitor(pid)
+    to_reply = [{{from, ref}, :ok} | sender_replies]
+
+    state
+    |> Map.replace!(:closed, true)
+    |> Map.replace!(:senders, :queue.new())
+    |> Map.replace!(:to_reply, to_reply)
+    |> handle_state()
   end
 
-  defp next_alive([]), do: {nil, []}
-  defp next_alive([peer | peers]) do
-    if peer |> extract_pid |> Process.alive? do
-      {peer, peers}
+  @impl GenServer
+  def handle_cast(request, state) do
+    Logger.error("Invalid cast received: #{inspect(request)}")
+    {:noreply, state}
+  end
+
+  @impl GenServer
+  def handle_info({:DOWN, ref, :process, _, _}, state) do
+    {:noreply, clear_dead_process(state, ref)}
+  end
+
+  @impl GenServer
+  def handle_info(request, state) do
+    Logger.error("Invalid message received: #{inspect(request)}")
+    {:noreply, state}
+  end
+
+  @impl GenServer
+  def terminate(_reason, _state) do
+    :ok
+  end
+
+  @impl GenServer
+  def code_change(_old_vsn, state, _extra) do
+    {:ok, state}
+  end
+
+  defp handle_state(state) do
+    new_state =
+      state
+      |> answer_receivers()
+      |> update_buffer()
+      |> deliver_replies()
+
+    if new_state.closed and is_empty(new_state) do
+      {:stop, :normal, new_state}
     else
-      next_alive(peers)
+      {:noreply, new_state}
     end
   end
 
-  defp extract_pid({{pid, _flag}, _value}), do: pid
-  defp extract_pid({pid, _flag}), do: pid
-
-  defp pop(list) do
-    item = List.last(list)
-
-    {item, List.delete_at(list, -1)}
+  defp answer_receivers(%{receivers: receivers} = state) do
+    with {{:value, receiver}, new_receivers} <- :queue.out(receivers),
+         {:ok, value, new_state} <- next_value(state) do
+      new_state
+      |> Map.replace!(:receivers, new_receivers)
+      |> Map.update!(:to_reply, &[{receiver, value} | &1])
+      |> answer_receivers()
+    else
+      _ ->
+        state
+    end
   end
 
-  defp put_in_buffer(buffer, item, _type, size) when length(buffer) < size do
-    {:ok, [item | buffer]}
+  defp update_buffer(%{senders: senders, buffer: buffer} = state) do
+    with {{:value, {sender, value}}, new_senders} <- :queue.out(senders),
+         {:ok, new_buffer} <- Buffer.put(buffer, value) do
+      state
+      |> Map.replace!(:senders, new_senders)
+      |> Map.replace!(:buffer, new_buffer)
+      |> Map.update!(:to_reply, &[{sender, :ok} | &1])
+      |> update_buffer()
+    else
+      _ -> state
+    end
   end
 
-  defp put_in_buffer(_buffer, _item, :blocking, _size) do
-    {:error, :block}
+  defp next_value(state) do
+    case Buffer.next(state.buffer) do
+      {:ok, value, new_buffer} ->
+        new_state = Map.replace!(state, :buffer, new_buffer)
+
+        {:ok, value, new_state}
+
+      :empty ->
+        case :queue.out(state.senders) do
+          {{:value, {sender, value}}, new_senders} ->
+            new_state =
+              state
+              |> Map.replace!(:senders, new_senders)
+              |> Map.update!(:to_reply, &[{sender, :ok} | &1])
+
+            {:ok, value, new_state}
+
+          {:empty, _senders} ->
+            :empty
+        end
+    end
   end
 
-  defp put_in_buffer(buffer, item, :sliding, _size) do
-    {:ok, [item | List.delete_at(buffer, -1)]}
+  defp deliver_replies(state) do
+    Enum.each(state.to_reply, fn {{client, monitor_ref}, reply} ->
+      GenServer.reply(client, reply)
+
+      Process.demonitor(monitor_ref)
+    end)
+
+    Map.replace!(state, :to_reply, [])
   end
 
-  defp put_in_buffer(buffer, _item, :dropping, _size) do
-    {:ok, buffer}
+  defp is_empty(%{buffer: buffer, senders: senders}) do
+    :queue.is_empty(senders) && Buffer.next(buffer) == :empty
+  end
+
+  defp clear_dead_process(state, ref) do
+    state
+    |> Map.update!(:senders, fn senders ->
+      :queue.filter(fn {{{_from, _ref}, sender_ref}, _val} -> sender_ref != ref end, senders)
+    end)
+    |> Map.update!(:receivers, fn receivers ->
+      :queue.filter(fn {{_from, _ref}, receiver_ref} -> receiver_ref != ref end, receivers)
+    end)
   end
 end
